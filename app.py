@@ -1,5 +1,4 @@
-!pip install fastapi uvicorn pyngrok pillow transformers --quiet
-
+import os
 import io
 import torch
 from pathlib import Path
@@ -14,19 +13,19 @@ import uvicorn
 # -------------------
 # Config
 # -------------------
-NGROK_AUTH_TOKEN = "32pYfrRbl7P4bNqCVTJgQh4QWnO_7NajKxqEoNoxwDrRgEzM5"
-CUSTOM_DOMAIN = "unadvantageously-clypeate-blakely.ngrok-free.app"
-PORT = 8000
+PORT = int(os.getenv("PORT", 8000))
+CUSTOM_DOMAIN = os.getenv("NGROK_DOMAIN", "unadvantageously-clypeate-blakely.ngrok-free.app")
+NGROK_AUTH_TOKEN = os.getenv("NGROK_AUTH_TOKEN")
 
-# Authenticate ngrok
-ngrok.set_auth_token(NGROK_AUTH_TOKEN)
+if NGROK_AUTH_TOKEN:
+    ngrok.set_auth_token(NGROK_AUTH_TOKEN)
 
 # -------------------
 # FastAPI App
 # -------------------
 app = FastAPI(title="MagiV3 Comic Panel Splitter API")
 
-# Allow all origins (like Flask-Cors did)
+# Allow all origins
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -55,7 +54,6 @@ try:
 except Exception as e:
     print("❌ Failed to load model:", e)
     model, processor = None, None
-
 
 # -------------------
 # Endpoints
@@ -88,15 +86,4 @@ async def split_panels(image: UploadFile = File(...)):
         return JSONResponse(content={"num_panels": len(panel_images)})
     else:
         buf = io.BytesIO()
-        panel_images.save(buf, format="PNG")
-        buf.seek(0)
-        return StreamingResponse(buf, media_type="image/png")
-
-
-# -------------------
-# Run Server with ngrok
-# -------------------
-if __name__ == "__main__":
-    public_url = ngrok.connect(PORT, "http", domain=CUSTOM_DOMAIN).public_url
-    print(f"Public URL: {public_url}")
-    uvicorn.run(app, host="0.0.0.0", port=PORT)
+        panel_images.save(buf, format="PN_
