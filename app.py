@@ -54,7 +54,7 @@ def load_model():
 # ---------- API ----------
 @app.post("/split_panels")
 async def split_panels(file: UploadFile = File(...)):
-    """Takes an image, returns cropped panel images as PNG streams."""
+    """Takes an image, returns all cropped panel images as a ZIP file."""
     global MODEL, PROCESSOR
     if MODEL is None or PROCESSOR is None:
         raise HTTPException(status_code=500, detail="Model not loaded")
@@ -73,17 +73,23 @@ async def split_panels(file: UploadFile = File(...)):
         if not panel_boxes:
             return JSONResponse({"message": "No panels detected"})
 
-        # Return first panel as demo stream (could zip all)
-        panel_images = []
-        for i, bbox in enumerate(panel_boxes):
-            panel_image = image.crop(bbox)
-            buf = io.BytesIO()
-            panel_image.save(buf, format="PNG")
-            buf.seek(0)
-            panel_images.append(buf)
+        # Build ZIP in memory
+        zip_buf = io.BytesIO()
+        import zipfile
+        with zipfile.ZipFile(zip_buf, "w") as zipf:
+            for i, bbox in enumerate(panel_boxes):
+                panel_image = image.crop(bbox)
+                img_bytes = io.BytesIO()
+                panel_image.save(img_bytes, format="PNG")
+                img_bytes.seek(0)
+                zipf.writestr(f"panel_{i+1}.png", img_bytes.read())
+        zip_buf.seek(0)
 
-        # Right now: return only the first panel (to keep it simple)
-        return StreamingResponse(panel_images[0], media_type="image/png")
+        return StreamingResponse(
+            zip_buf,
+            media_type="application/zip",
+            headers={"Content-Disposition": "attachment; filename=panels.zip"}
+        )
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
