@@ -86,4 +86,14 @@ async def split_panels(image: UploadFile = File(...)):
         return JSONResponse(content={"num_panels": len(panel_images)})
     else:
         buf = io.BytesIO()
-        panel_images.save(buf, format="PN_
+        panel_images.save(buf, format="PNG")
+        buf.seek(0)
+        return StreamingResponse(buf, media_type="image/png")
+
+# -------------------
+# Run Server with ngrok
+# -------------------
+if __name__ == "__main__":
+    public_url = ngrok.connect(PORT, "http", domain=CUSTOM_DOMAIN).public_url
+    print(f"Public URL: {public_url}")
+    uvicorn.run(app, host="0.0.0.0", port=PORT)
