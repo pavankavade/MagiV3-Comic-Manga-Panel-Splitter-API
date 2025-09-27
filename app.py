@@ -64,7 +64,8 @@ def add_border_to_image(image, border_width=DEFAULT_BORDER_WIDTH, border_color=B
 async def split_panels(
     file: UploadFile = File(...),
     add_border: bool = Query(False, description="Whether to add a border to each panel"),
-    border_width: int = Query(DEFAULT_BORDER_WIDTH, description="Width of the border in pixels", ge=1, le=50)
+    border_width: int = Query(DEFAULT_BORDER_WIDTH, description="Width of the border in pixels", ge=1, le=50),
+    border_color: str = Query(BORDER_COLOR, description="Color of the border (e.g., 'red', 'blue', '#FF0000')")
 ):
     """Takes an image, returns all cropped panel images as a ZIP file. 
     Optionally adds borders if add_border=True."""
@@ -96,7 +97,7 @@ async def split_panels(
                 
                 # Add border only if requested
                 if add_border:
-                    panel_image = add_border_to_image(panel_image, border_width, BORDER_COLOR)
+                    panel_image = add_border_to_image(panel_image, border_width, border_color)
                 
                 # Save to ZIP
                 img_bytes = io.BytesIO()
@@ -109,6 +110,57 @@ async def split_panels(
         return StreamingResponse(
             zip_buf,
             media_type="application/zip",
+            headers={"Content-Disposition": f"attachment; filename={filename}"}
+        )
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/test_first_panel")
+async def test_first_panel(
+    file: UploadFile = File(...),
+    add_border: bool = Query(False, description="Whether to add a border to the panel"),
+    border_width: int = Query(DEFAULT_BORDER_WIDTH, description="Width of the border in pixels", ge=1, le=50),
+    border_color: str = Query(BORDER_COLOR, description="Color of the border (e.g., 'red', 'blue', '#FF0000')")
+):
+    """Test endpoint that takes an image and returns only the first detected panel as a single image download. 
+    Optionally adds borders if add_border=True."""
+    global MODEL, PROCESSOR
+    if MODEL is None or PROCESSOR is None:
+        raise HTTPException(status_code=500, detail="Model not loaded")
+
+    try:
+        # Load uploaded image
+        contents = await file.read()
+        image = Image.open(io.BytesIO(contents)).convert("RGB")
+
+        # Detect panels
+        with torch.no_grad():
+            results = MODEL.predict_detections_and_associations([image], PROCESSOR)
+        page_result = results[0]
+        panel_boxes = page_result["panels"]
+
+        if not panel_boxes:
+            return JSONResponse({"message": "No panels detected"})
+
+        # Get only the first panel
+        first_bbox = panel_boxes[0]
+        panel_image = image.crop(first_bbox)
+        
+        # Add border only if requested
+        if add_border:
+            panel_image = add_border_to_image(panel_image, border_width, border_color)
+        
+        # Save to memory buffer
+        img_bytes = io.BytesIO()
+        panel_image.save(img_bytes, format="PNG")
+        img_bytes.seek(0)
+
+        filename = "first_panel_with_border.png" if add_border else "first_panel.png"
+        return StreamingResponse(
+            img_bytes,
+            media_type="image/png",
             headers={"Content-Disposition": f"attachment; filename={filename}"}
         )
 
