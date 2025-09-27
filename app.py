@@ -2,10 +2,10 @@ import os
 import io
 import torch
 import warnings
-from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi import FastAPI, UploadFile, File, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, JSONResponse
-from PIL import Image
+from PIL import Image, ImageOps
 from pyngrok import ngrok
 from transformers import AutoModel, AutoProcessor
 import uvicorn
@@ -30,6 +30,10 @@ MODEL = None
 PROCESSOR = None
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
+# Configuration for border
+DEFAULT_BORDER_WIDTH = 10
+BORDER_COLOR = "black"
+
 # ---------- Load model ----------
 @app.on_event("startup")
 def load_model():
@@ -51,10 +55,19 @@ def load_model():
         print("❌ Failed to load model:", e)
         raise
 
+def add_border_to_image(image, border_width=DEFAULT_BORDER_WIDTH, border_color=BORDER_COLOR):
+    """Add a border around the image."""
+    return ImageOps.expand(image, border=border_width, fill=border_color)
+
 # ---------- API ----------
 @app.post("/split_panels")
-async def split_panels(file: UploadFile = File(...)):
-    """Takes an image, returns all cropped panel images as a ZIP file."""
+async def split_panels(
+    file: UploadFile = File(...),
+    add_border: bool = Query(False, description="Whether to add a border to each panel"),
+    border_width: int = Query(DEFAULT_BORDER_WIDTH, description="Width of the border in pixels", ge=1, le=50)
+):
+    """Takes an image, returns all cropped panel images as a ZIP file. 
+    Optionally adds borders if add_border=True."""
     global MODEL, PROCESSOR
     if MODEL is None or PROCESSOR is None:
         raise HTTPException(status_code=500, detail="Model not loaded")
@@ -78,17 +91,25 @@ async def split_panels(file: UploadFile = File(...)):
         import zipfile
         with zipfile.ZipFile(zip_buf, "w") as zipf:
             for i, bbox in enumerate(panel_boxes):
+                # Crop the panel
                 panel_image = image.crop(bbox)
+                
+                # Add border only if requested
+                if add_border:
+                    panel_image = add_border_to_image(panel_image, border_width, BORDER_COLOR)
+                
+                # Save to ZIP
                 img_bytes = io.BytesIO()
                 panel_image.save(img_bytes, format="PNG")
                 img_bytes.seek(0)
                 zipf.writestr(f"panel_{i+1}.png", img_bytes.read())
         zip_buf.seek(0)
 
+        filename = "panels_with_borders.zip" if add_border else "panels.zip"
         return StreamingResponse(
             zip_buf,
             media_type="application/zip",
-            headers={"Content-Disposition": "attachment; filename=panels.zip"}
+            headers={"Content-Disposition": f"attachment; filename={filename}"}
         )
 
     except Exception as e:
@@ -101,6 +122,11 @@ def status():
         "loaded": MODEL is not None,
         "device": DEVICE,
         "cuda_available": torch.cuda.is_available(),
+        "border_settings": {
+            "default_border_width": DEFAULT_BORDER_WIDTH,
+            "border_color": BORDER_COLOR,
+            "add_border_default": False
+        }
     }
 
 # ---------- Run server ----------
