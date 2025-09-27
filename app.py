@@ -35,8 +35,6 @@ DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 DEFAULT_BORDER_WIDTH = 10
 BORDER_COLOR = "black"
 DEFAULT_CORNER_RADIUS = 15
-DEFAULT_SHADOW_OFFSET = (5, 5)
-DEFAULT_SHADOW_BLUR = 10
 
 # ---------- Load model ----------
 @app.on_event("startup")
@@ -66,104 +64,34 @@ def create_rounded_rectangle_mask(width, height, radius):
     draw.rounded_rectangle([(0, 0), (width, height)], radius=radius, fill=255)
     return mask
 
-def parse_color(color_str):
-    """Convert color string to RGBA tuple."""
-    if color_str.startswith('#'):
-        # Handle hex colors
-        hex_color = color_str.lstrip('#')
-        if len(hex_color) == 6:
-            return tuple(int(hex_color[i:i+2], 16) for i in (0, 2, 4))
-        elif len(hex_color) == 3:
-            return tuple(int(hex_color[i]*2, 16) for i in range(3))
-    
-    # Handle named colors
-    color_map = {
-        'black': (0, 0, 0),
-        'white': (255, 255, 255),
-        'red': (255, 0, 0),
-        'green': (0, 255, 0),
-        'blue': (0, 0, 255),
-        'gray': (128, 128, 128),
-        'grey': (128, 128, 128),
-        'yellow': (255, 255, 0),
-        'cyan': (0, 255, 255),
-        'magenta': (255, 0, 255),
-    }
-    
-    return color_map.get(color_str.lower(), (128, 128, 128))  # Default to gray
-
-def add_shadow_to_image(image, offset=(5, 5), blur_radius=10, shadow_color='gray'):
-    """Add shadow effect to an image."""
-    # Create shadow
-    shadow = Image.new('RGBA', 
-                      (image.width + abs(offset[0]) + blur_radius * 2, 
-                       image.height + abs(offset[1]) + blur_radius * 2), 
-                      (0, 0, 0, 0))
-    
-    # Parse shadow color to RGB tuple and add alpha
-    shadow_rgb = parse_color(shadow_color)
-    shadow_rgba = shadow_rgb + (128,)  # Semi-transparent shadow
-    
-    # Create shadow shape
-    shadow_img = Image.new('RGBA', image.size, shadow_rgba)
-    
-    # Apply the same mask to shadow if image has transparency
-    if image.mode == 'RGBA':
-        shadow_img.putalpha(image.split()[-1])  # Use original alpha
-    
-    # Blur the shadow
-    shadow_img = shadow_img.filter(ImageFilter.GaussianBlur(blur_radius))
-    
-    # Position shadow
-    shadow_pos = (blur_radius + max(0, offset[0]), blur_radius + max(0, offset[1]))
-    shadow.paste(shadow_img, shadow_pos)
-    
-    # Position original image
-    img_pos = (blur_radius - min(0, offset[0]), blur_radius - min(0, offset[1]))
-    shadow.paste(image, img_pos, image if image.mode == 'RGBA' else None)
-    
-    return shadow
-
-def add_curved_border_and_shadow(image, 
-                                border_width=DEFAULT_BORDER_WIDTH, 
-                                border_color=BORDER_COLOR,
-                                corner_radius=DEFAULT_CORNER_RADIUS,
-                                add_shadow=True,
-                                shadow_offset=DEFAULT_SHADOW_OFFSET,
-                                shadow_blur=DEFAULT_SHADOW_BLUR):
-    """Add curved border and shadow to an image."""
-    
-    # Convert to RGBA for transparency support
-    if image.mode != 'RGBA':
-        image = image.convert('RGBA')
+def add_curved_border(image, 
+                     border_width=DEFAULT_BORDER_WIDTH, 
+                     border_color=BORDER_COLOR,
+                     corner_radius=DEFAULT_CORNER_RADIUS):
+    """Add curved border to an image without shadow or white margins."""
     
     # Add border first (only if border_width > 0)
     if border_width > 0:
         bordered_img = ImageOps.expand(image, border=border_width, fill=border_color)
     else:
-        bordered_img = image
+        bordered_img = image.copy()
     
     # Create rounded corners
     width, height = bordered_img.size
     mask = create_rounded_rectangle_mask(width, height, corner_radius)
     
-    # Apply rounded corners
-    rounded_img = Image.new('RGBA', (width, height), (0, 0, 0, 0))
-    rounded_img.paste(bordered_img, (0, 0))
-    rounded_img.putalpha(mask)
+    # Apply rounded corners directly without creating transparent background
+    output = Image.new('RGB', (width, height), 'white')
+    output.paste(bordered_img, (0, 0))
     
-    # Add shadow if requested
-    if add_shadow:
-        final_img = add_shadow_to_image(rounded_img, shadow_offset, shadow_blur)
-        # Convert back to RGB with white background
-        result = Image.new('RGB', final_img.size, 'white')
-        result.paste(final_img, (0, 0), final_img)
-        return result
-    else:
-        # Convert back to RGB with white background
-        result = Image.new('RGB', rounded_img.size, 'white')
-        result.paste(rounded_img, (0, 0), rounded_img)
-        return result
+    # Create a version with transparency for masking
+    temp_rgba = bordered_img.convert('RGBA')
+    temp_rgba.putalpha(mask)
+    
+    # Paste the masked image onto white background
+    output.paste(temp_rgba, (0, 0), temp_rgba)
+    
+    return output
 
 def add_border_to_image(image, border_width=DEFAULT_BORDER_WIDTH, border_color=BORDER_COLOR):
     """Add a simple border around the image (legacy function)."""
@@ -177,12 +105,10 @@ async def split_panels(
     border_width: int = Query(DEFAULT_BORDER_WIDTH, description="Width of the border in pixels", ge=1, le=50),
     border_color: str = Query(BORDER_COLOR, description="Color of the border (e.g., 'red', 'blue', '#FF0000')"),
     curved_border: bool = Query(False, description="Whether to add curved borders"),
-    corner_radius: int = Query(DEFAULT_CORNER_RADIUS, description="Corner radius for curved borders", ge=5, le=50),
-    add_shadow: bool = Query(False, description="Whether to add shadow effect"),
-    shadow_blur: int = Query(DEFAULT_SHADOW_BLUR, description="Shadow blur radius", ge=1, le=30)
+    corner_radius: int = Query(DEFAULT_CORNER_RADIUS, description="Corner radius for curved borders", ge=5, le=50)
 ):
     """Takes an image, returns all cropped panel images as a ZIP file. 
-    Optionally adds borders, curved corners, and shadows."""
+    Optionally adds borders and curved corners."""
     global MODEL, PROCESSOR
     if MODEL is None or PROCESSOR is None:
         raise HTTPException(status_code=500, detail="Model not loaded")
@@ -210,15 +136,13 @@ async def split_panels(
                 panel_image = image.crop(bbox)
                 
                 # Add effects if requested
-                if add_border or curved_border or add_shadow:
-                    if curved_border or add_shadow:
-                        panel_image = add_curved_border_and_shadow(
+                if add_border or curved_border:
+                    if curved_border:
+                        panel_image = add_curved_border(
                             panel_image, 
                             border_width=border_width if add_border else 0,
                             border_color=border_color,
-                            corner_radius=corner_radius,
-                            add_shadow=add_shadow,
-                            shadow_blur=shadow_blur
+                            corner_radius=corner_radius
                         )
                     elif add_border:
                         panel_image = add_border_to_image(panel_image, border_width, border_color)
@@ -236,8 +160,6 @@ async def split_panels(
             effects.append("borders")
         if curved_border:
             effects.append("curved")
-        if add_shadow:
-            effects.append("shadow")
         
         filename = f"panels_{'_'.join(effects)}.zip" if effects else "panels.zip"
         return StreamingResponse(
@@ -257,12 +179,10 @@ async def test_first_panel(
     border_width: int = Query(DEFAULT_BORDER_WIDTH, description="Width of the border in pixels", ge=1, le=50),
     border_color: str = Query(BORDER_COLOR, description="Color of the border (e.g., 'red', 'blue', '#FF0000')"),
     curved_border: bool = Query(False, description="Whether to add curved borders"),
-    corner_radius: int = Query(DEFAULT_CORNER_RADIUS, description="Corner radius for curved borders", ge=5, le=50),
-    add_shadow: bool = Query(False, description="Whether to add shadow effect"),
-    shadow_blur: int = Query(DEFAULT_SHADOW_BLUR, description="Shadow blur radius", ge=1, le=30)
+    corner_radius: int = Query(DEFAULT_CORNER_RADIUS, description="Corner radius for curved borders", ge=5, le=50)
 ):
     """Test endpoint that takes an image and returns only the first detected panel as a single image download. 
-    Optionally adds borders, curved corners, and shadows."""
+    Optionally adds borders and curved corners."""
     global MODEL, PROCESSOR
     if MODEL is None or PROCESSOR is None:
         raise HTTPException(status_code=500, detail="Model not loaded")
@@ -286,15 +206,13 @@ async def test_first_panel(
         panel_image = image.crop(first_bbox)
         
         # Add effects if requested
-        if add_border or curved_border or add_shadow:
-            if curved_border or add_shadow:
-                panel_image = add_curved_border_and_shadow(
+        if add_border or curved_border:
+            if curved_border:
+                panel_image = add_curved_border(
                     panel_image, 
                     border_width=border_width if add_border else 0,
                     border_color=border_color,
-                    corner_radius=corner_radius,
-                    add_shadow=add_shadow,
-                    shadow_blur=shadow_blur
+                    corner_radius=corner_radius
                 )
             elif add_border:
                 panel_image = add_border_to_image(panel_image, border_width, border_color)
@@ -310,8 +228,6 @@ async def test_first_panel(
             effects.append("border")
         if curved_border:
             effects.append("curved")
-        if add_shadow:
-            effects.append("shadow")
         
         filename = f"first_panel_{'_'.join(effects)}.png" if effects else "first_panel.png"
         return StreamingResponse(
@@ -337,11 +253,6 @@ def status():
             "curved_border_settings": {
                 "default_corner_radius": DEFAULT_CORNER_RADIUS,
                 "curved_border_default": False
-            },
-            "shadow_settings": {
-                "default_shadow_offset": DEFAULT_SHADOW_OFFSET,
-                "default_shadow_blur": DEFAULT_SHADOW_BLUR,
-                "add_shadow_default": False
             }
         }
     }
