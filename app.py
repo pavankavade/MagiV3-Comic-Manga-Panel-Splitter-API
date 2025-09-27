@@ -66,6 +66,32 @@ def create_rounded_rectangle_mask(width, height, radius):
     draw.rounded_rectangle([(0, 0), (width, height)], radius=radius, fill=255)
     return mask
 
+def parse_color(color_str):
+    """Convert color string to RGBA tuple."""
+    if color_str.startswith('#'):
+        # Handle hex colors
+        hex_color = color_str.lstrip('#')
+        if len(hex_color) == 6:
+            return tuple(int(hex_color[i:i+2], 16) for i in (0, 2, 4))
+        elif len(hex_color) == 3:
+            return tuple(int(hex_color[i]*2, 16) for i in range(3))
+    
+    # Handle named colors
+    color_map = {
+        'black': (0, 0, 0),
+        'white': (255, 255, 255),
+        'red': (255, 0, 0),
+        'green': (0, 255, 0),
+        'blue': (0, 0, 255),
+        'gray': (128, 128, 128),
+        'grey': (128, 128, 128),
+        'yellow': (255, 255, 0),
+        'cyan': (0, 255, 255),
+        'magenta': (255, 0, 255),
+    }
+    
+    return color_map.get(color_str.lower(), (128, 128, 128))  # Default to gray
+
 def add_shadow_to_image(image, offset=(5, 5), blur_radius=10, shadow_color='gray'):
     """Add shadow effect to an image."""
     # Create shadow
@@ -74,8 +100,12 @@ def add_shadow_to_image(image, offset=(5, 5), blur_radius=10, shadow_color='gray
                        image.height + abs(offset[1]) + blur_radius * 2), 
                       (0, 0, 0, 0))
     
+    # Parse shadow color to RGB tuple and add alpha
+    shadow_rgb = parse_color(shadow_color)
+    shadow_rgba = shadow_rgb + (128,)  # Semi-transparent shadow
+    
     # Create shadow shape
-    shadow_img = Image.new('RGBA', image.size, shadow_color + (128,))  # Semi-transparent shadow
+    shadow_img = Image.new('RGBA', image.size, shadow_rgba)
     
     # Apply the same mask to shadow if image has transparency
     if image.mode == 'RGBA':
@@ -107,8 +137,11 @@ def add_curved_border_and_shadow(image,
     if image.mode != 'RGBA':
         image = image.convert('RGBA')
     
-    # Add border first
-    bordered_img = ImageOps.expand(image, border=border_width, fill=border_color)
+    # Add border first (only if border_width > 0)
+    if border_width > 0:
+        bordered_img = ImageOps.expand(image, border=border_width, fill=border_color)
+    else:
+        bordered_img = image
     
     # Create rounded corners
     width, height = bordered_img.size
